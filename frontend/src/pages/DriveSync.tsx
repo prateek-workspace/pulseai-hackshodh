@@ -364,14 +364,14 @@ export const DriveSync = () => {
                             <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600">1</div>
                             <div>
                                 <p className="font-medium text-gray-900">Export from Google Fit</p>
-                                <p className="text-sm text-gray-500">Open Google Fit → Settings → Export data → Save to Drive</p>
+                                <p className="text-sm text-gray-500">Open Google Fit → Settings → Export data → Save to Cloud</p>
                             </div>
                         </div>
                         <div className="flex items-start gap-4">
                             <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-sm font-bold text-gray-600">2</div>
                             <div>
-                                <p className="font-medium text-gray-900">Connect Google Drive</p>
-                                <p className="text-sm text-gray-500">Grant Pulse AI read-only access to your Drive</p>
+                                <p className="font-medium text-gray-900">Connect Google Cloud</p>
+                                <p className="text-sm text-gray-500">Grant Pulse AI read-only access to your Cloud</p>
                             </div>
                         </div>
                         <div className="flex items-start gap-4">
