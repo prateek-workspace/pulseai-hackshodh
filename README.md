@@ -591,7 +591,7 @@ MIT License - See LICENSE file for details.
 <div align="center">
 
 **Pulse AI** - Early warning, not diagnosis.
-
+Developed by Prateek Sriavastava, Prakhar Singh and Prakhar Dixit
 Made with ❤️ for proactive health
 
 </div>
