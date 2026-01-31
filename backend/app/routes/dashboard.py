@@ -72,7 +72,7 @@ async def get_dashboard_summary(
                 "severity": latest_score.severity_score if latest_score else 0,
                 "persistence": latest_score.persistence_score if latest_score else 0,
                 "cross_signal": latest_score.cross_signal_score if latest_score else 0,
-                "manual_modifier": latest_score.manual_modifier_score if latest_score else 0
+                "manual_modifier": latest_score.manual_modifier if latest_score else 0
             },
             "drift_score": latest_score.drift_score if latest_score else 0,
             "confidence": latest_score.confidence_score if latest_score else 0,

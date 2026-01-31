@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { dashboardService, authService, DashboardSummary, TrendData } from "../lib/api";
-import { generateSimulationData, calculateCareScore, AnalysisResult } from "../lib/simulation";
 import { Card, CardHeader, CardTitle, CardValue } from "../components/ui/Card";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
-import { Activity, ShieldCheck, TrendingUp, AlertCircle, ArrowRight, RefreshCw, Cloud } from "lucide-react";
+import { Activity, ShieldCheck, TrendingUp, AlertCircle, ArrowRight, RefreshCw, Cloud, Watch, Users, Heart, Stethoscope } from "lucide-react";
 import { clsx } from "clsx";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/Button";
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 interface DisplayData {
   date: string;
@@ -16,117 +17,261 @@ interface DisplayData {
   activityLevel?: number;
 }
 
+interface CareTeamMember {
+  id: number;
+  name: string;
+  role: "doctor" | "caretaker";
+  specialization?: string;
+  status: string;
+}
+
+interface HealthSuggestion {
+  suggestions: string[];
+  disclaimer: string;
+  source: string;
+}
+
 export const Dashboard = () => {
   const [data, setData] = useState<DisplayData[]>([]);
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isUsingRealData, setIsUsingRealData] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [hasData, setHasData] = useState(false);
+  const [careTeam, setCareTeam] = useState<CareTeamMember[]>([]);
+  const [healthSuggestions, setHealthSuggestions] = useState<HealthSuggestion | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const userId = authService.getUserId();
 
   useEffect(() => {
-    loadDashboardData();
+    if (userId) {
+      loadDashboardData();
+    } else {
+      setIsLoading(false);
+    }
   }, [userId]);
 
   const loadDashboardData = async () => {
     setIsLoading(true);
+    setSyncError(null);
 
     try {
-      if (userId) {
-        // Try to fetch real data from API
-        const [summaryData, trendsData] = await Promise.all([
-          dashboardService.getSummary(userId).catch(() => null),
-          dashboardService.getTrends(userId, 60).catch(() => null)
-        ]);
+      // Fetch real data from API
+      const [summaryData, trendsData] = await Promise.all([
+        dashboardService.getSummary(userId!).catch(() => null),
+        dashboardService.getTrends(userId!, 60).catch(() => null)
+      ]);
 
-        if (summaryData && summaryData.care_score) {
-          setSummary(summaryData);
-          setIsUsingRealData(true);
+      if (summaryData && summaryData.care_score && summaryData.care_score.score !== null) {
+        setSummary(summaryData);
+        setHasData(true);
 
-          // Convert trends to display format
-          if (trendsData && trendsData.trends.length > 0) {
-            const displayData = trendsData.trends.map((t: TrendData) => ({
-              date: t.date,
-              heartRate: t.heart_rate || 70,
-              hrv: t.hrv || 65,
-              sleepDuration: t.sleep_duration || 7.5,
-              activityLevel: t.activity_level || 8000
-            }));
-            setData(displayData);
-          } else {
-            // Use simulation data for charts if no trend data
-            setData(generateSimulationData().map(d => ({
-              date: d.date,
-              heartRate: d.heartRate,
-              hrv: d.hrv,
-              sleepDuration: d.sleepDuration,
-              activityLevel: d.activityLevel
-            })));
+        // Convert trends to display format
+        if (trendsData && trendsData.trends.length > 0) {
+          const displayData = trendsData.trends.map((t: TrendData) => ({
+            date: t.date,
+            heartRate: t.heart_rate || 0,
+            hrv: t.hrv || 0,
+            sleepDuration: t.sleep_duration || 0,
+            activityLevel: t.activity_level || 0
+          }));
+          setData(displayData);
+        }
+
+        // Fetch health suggestions from CareScore API
+        try {
+          const suggestionsRes = await fetch(`${API_BASE}/care-score/suggestions/${userId}`);
+          if (suggestionsRes.ok) {
+            const suggestions = await suggestionsRes.json();
+            setHealthSuggestions(suggestions);
           }
+        } catch (e) {
+          console.error("Failed to fetch health suggestions:", e);
+        }
 
-          // Convert API care_score to analysis format
-          const careScore = summaryData.care_score;
-          setAnalysis({
-            currentScore: careScore.score || 0,
-            breakdown: {
-              severity: careScore.components.severity,
-              persistence: careScore.components.persistence,
-              crossSignal: careScore.components.cross_signal,
-              manualModifier: careScore.components.manual_modifier,
-              total: careScore.score || 0
-            },
-            status: careScore.status as AnalysisResult["status"],
-            driftDetected: (careScore.drift_score || 0) > 30,
-            confidence: careScore.confidence || 85,
-            stability: careScore.stability || (100 - (careScore.score || 0)),
-            trends: []
-          });
-        } else {
-          // Fall back to simulation data
-          loadSimulationData();
+        // Fetch care team
+        try {
+          const careTeamRes = await fetch(`${API_BASE}/patients/care-team/${userId}`);
+          if (careTeamRes.ok) {
+            const team = await careTeamRes.json();
+            setCareTeam(team);
+          }
+        } catch (e) {
+          console.error("Failed to fetch care team:", e);
         }
       } else {
-        // No user, use simulation data
-        loadSimulationData();
+        setHasData(false);
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
-      loadSimulationData();
+      setHasData(false);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadSimulationData = () => {
-    setIsUsingRealData(false);
-    const simData = generateSimulationData();
-    setData(simData.map(d => ({
-      date: d.date,
-      heartRate: d.heartRate,
-      hrv: d.hrv,
-      sleepDuration: d.sleepDuration,
-      activityLevel: d.activityLevel
-    })));
-    const latest = simData[simData.length - 1];
-    const result = calculateCareScore(latest);
-    result.trends = simData;
-    setAnalysis(result);
+  const handleSyncData = async () => {
+    setIsSyncing(true);
+    setSyncError(null);
+
+    try {
+      // Trigger CareScore calculation for existing data
+      const response = await fetch(`${API_BASE}/care-score/calculate/${userId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        }
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || "Failed to calculate CareScore");
+      }
+
+      const result = await response.json();
+
+      // Set suggestions if returned
+      if (result.suggestions) {
+        setHealthSuggestions({
+          suggestions: result.suggestions,
+          disclaimer: result.disclaimer || "These are general wellness suggestions only.",
+          source: "gemini"
+        });
+      }
+
+      // Reload dashboard data
+      await loadDashboardData();
+    } catch (err: any) {
+      setSyncError(err.message || "Sync failed. Please try again.");
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
-  if (isLoading || !analysis) {
+  // Loading state
+  if (isLoading) {
     return (
       <div className="p-12 text-center text-gray-400 flex flex-col items-center gap-4">
         <div className="w-8 h-8 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-        Initializing Pulse AI Kernel...
+        Loading your health data...
       </div>
     );
   }
 
+  // No user logged in
+  if (!userId) {
+    return (
+      <div className="p-12 text-center">
+        <Activity className="w-16 h-16 text-gray-200 mx-auto mb-4" />
+        <h2 className="text-xl font-bold text-gray-900 mb-2">Please Sign In</h2>
+        <p className="text-gray-500 mb-6">Sign in to view your health dashboard</p>
+        <Link to="/login">
+          <Button>Sign In</Button>
+        </Link>
+      </div>
+    );
+  }
+
+  // No data state - prompt to sync
+  if (!hasData) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Clinical Surveillance</h1>
+          <p className="text-gray-500 mt-1">Real-time monitoring and drift detection.</p>
+        </div>
+
+        {/* Empty State Card */}
+        <Card className="p-12 text-center">
+          <Watch className="w-20 h-20 text-gray-200 mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-3">No Health Data Yet</h2>
+          <p className="text-gray-500 max-w-md mx-auto mb-8">
+            Sync your wearable device or manually input your health data to get started with personalized health monitoring and CareScore analysis.
+          </p>
+
+          {syncError && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm max-w-md mx-auto">
+              {syncError}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Button
+              onClick={handleSyncData}
+              disabled={isSyncing}
+              className="gap-2"
+            >
+              {isSyncing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Sync & Calculate CareScore
+                </>
+              )}
+            </Button>
+            <Link to="/sync">
+              <Button variant="outline" className="gap-2">
+                <Cloud className="w-4 h-4" />
+                Connect Wearable
+              </Button>
+            </Link>
+          </div>
+
+          <div className="mt-8 pt-8 border-t border-gray-100">
+            <p className="text-sm text-gray-500 mb-4">Or manually add health data</p>
+            <Link to="/add-data">
+              <Button variant="outline" className="text-sm">
+                Add Health Metrics Manually
+              </Button>
+            </Link>
+          </div>
+        </Card>
+
+        {/* Quick Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Card className="p-6">
+            <Activity className="w-8 h-8 text-zinc-400 mb-4" />
+            <h3 className="font-semibold text-gray-900 mb-2">CareScore™</h3>
+            <p className="text-sm text-gray-500">
+              Our AI analyzes your vitals to generate a comprehensive health drift score.
+            </p>
+          </Card>
+          <Card className="p-6">
+            <TrendingUp className="w-8 h-8 text-zinc-400 mb-4" />
+            <h3 className="font-semibold text-gray-900 mb-2">Trend Analysis</h3>
+            <p className="text-sm text-gray-500">
+              Track patterns over 60 days to detect clinical drift before it becomes serious.
+            </p>
+          </Card>
+          <Card className="p-6">
+            <ShieldCheck className="w-8 h-8 text-zinc-400 mb-4" />
+            <h3 className="font-semibold text-gray-900 mb-2">Smart Alerts</h3>
+            <p className="text-sm text-gray-500">
+              Get notified when anomalies are detected, keeping you and your care team informed.
+            </p>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // Has data - show full dashboard
+  const careScore = summary?.care_score;
+  const currentScore = careScore?.score || 0;
+  const status = careScore?.status || "Stable";
+
   const scoreColor =
-    analysis.currentScore > 70 ? "text-red-600" :
-      analysis.currentScore > 50 ? "text-amber-600" :
-        analysis.currentScore > 30 ? "text-blue-600" : "text-emerald-600";
+    currentScore > 70 ? "text-red-600" :
+      currentScore > 50 ? "text-amber-600" :
+        currentScore > 30 ? "text-blue-600" : "text-emerald-600";
+
+  const driftDetected = (careScore?.drift_score || 0) > 30;
+  const confidence = careScore?.confidence || 85;
+  const stability = careScore?.stability || (100 - currentScore);
 
   return (
     <div className="space-y-8">
@@ -136,25 +281,22 @@ export const Dashboard = () => {
           <p className="text-gray-500 mt-1">Real-time monitoring and drift detection.</p>
         </div>
         <div className="flex items-center gap-4">
-          {/* Data Source Indicator */}
-          <div className={clsx(
-            "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium",
-            isUsingRealData
-              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-              : "bg-amber-50 text-amber-700 border border-amber-200"
-          )}>
-            {isUsingRealData ? (
-              <>
-                <Cloud className="w-3.5 h-3.5" />
-                Live Data
-              </>
-            ) : (
-              <>
-                <Activity className="w-3.5 h-3.5" />
-                Demo Mode
-              </>
-            )}
+          {/* Live Data Indicator */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <Cloud className="w-3.5 h-3.5" />
+            Live Data
           </div>
+
+          {/* Sync Button */}
+          <Button
+            variant="outline"
+            onClick={handleSyncData}
+            disabled={isSyncing}
+            className="gap-2"
+          >
+            <RefreshCw className={clsx("w-4 h-4", isSyncing && "animate-spin")} />
+            {isSyncing ? "Syncing..." : "Refresh"}
+          </Button>
 
           {/* System Status */}
           <div className="flex items-center gap-2">
@@ -167,23 +309,6 @@ export const Dashboard = () => {
         </div>
       </div>
 
-      {/* No data warning with sync button */}
-      {!isUsingRealData && userId && (
-        <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-lg">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-amber-600" />
-            <p className="text-sm text-amber-800">
-              Showing simulated data. Sync your health data to see real insights.
-            </p>
-          </div>
-          <Link to="/sync">
-            <Button variant="outline" className="gap-2 text-sm">
-              <RefreshCw className="w-4 h-4" /> Sync Data
-            </Button>
-          </Link>
-        </div>
-      )}
-
       {/* Hero Score Card */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1 border-l-4 border-l-gray-900">
@@ -193,26 +318,26 @@ export const Dashboard = () => {
           </CardHeader>
           <div className="flex items-baseline gap-2">
             <span className={clsx("text-6xl font-bold tracking-tighter", scoreColor)}>
-              {analysis.currentScore}
+              {currentScore}
             </span>
             <span className="text-gray-400 font-medium">/ 100</span>
           </div>
           <div className="mt-4 flex items-center gap-2">
             <span className={clsx(
               "px-2.5 py-0.5 rounded-full text-xs font-medium border",
-              analysis.status === "High" ? "bg-red-50 text-red-700 border-red-200" :
-                analysis.status === "Moderate" ? "bg-amber-50 text-amber-700 border-amber-200" :
-                  analysis.status === "Mild" ? "bg-blue-50 text-blue-700 border-blue-200" :
+              status === "High" ? "bg-red-50 text-red-700 border-red-200" :
+                status === "Moderate" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                  status === "Mild" ? "bg-blue-50 text-blue-700 border-blue-200" :
                     "bg-emerald-50 text-emerald-700 border-emerald-200"
             )}>
-              {analysis.status} Risk
+              {status} Risk
             </span>
-            {analysis.driftDetected && (
+            {driftDetected && (
               <span className="text-xs text-gray-500">Clinical drift detected</span>
             )}
           </div>
 
-          {analysis.currentScore > 70 && (
+          {currentScore > 70 && (
             <div className="mt-6">
               <Link to="/escalation">
                 <Button variant="danger" className="w-full gap-2">
@@ -227,39 +352,47 @@ export const Dashboard = () => {
           <CardHeader>
             <CardTitle>60-Day Drift Analysis</CardTitle>
           </CardHeader>
-          <div className="h-[200px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data}>
-                <defs>
-                  <linearGradient id="colorHr" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#111827" stopOpacity={0.1} />
-                    <stop offset="95%" stopColor="#111827" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis
-                  dataKey="date"
-                  hide
-                />
-                <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
-                <Tooltip
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                />
-                <ReferenceLine y={70} stroke="#E5E7EB" strokeDasharray="3 3" />
-                <Area
-                  type="monotone"
-                  dataKey="heartRate"
-                  stroke="#111827"
-                  strokeWidth={2}
-                  fillOpacity={1}
-                  fill="url(#colorHr)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex justify-between text-xs text-gray-400 mt-2 px-2">
-            <span>60 Days Ago</span>
-            <span>Today</span>
-          </div>
+          {data.length > 0 ? (
+            <>
+              <div className="h-[200px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={data}>
+                    <defs>
+                      <linearGradient id="colorHr" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#111827" stopOpacity={0.1} />
+                        <stop offset="95%" stopColor="#111827" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="date" hide />
+                    <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <ReferenceLine y={70} stroke="#E5E7EB" strokeDasharray="3 3" />
+                    <Area
+                      type="monotone"
+                      dataKey="heartRate"
+                      stroke="#111827"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorHr)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="flex justify-between text-xs text-gray-400 mt-2 px-2">
+                <span>60 Days Ago</span>
+                <span>Today</span>
+              </div>
+            </>
+          ) : (
+            <div className="h-[200px] flex items-center justify-center text-gray-400">
+              <div className="text-center">
+                <TrendingUp className="w-12 h-12 mx-auto mb-2 text-gray-200" />
+                <p className="text-sm">Trend data will appear as you sync more readings</p>
+              </div>
+            </div>
+          )}
         </Card>
       </div>
 
@@ -270,7 +403,7 @@ export const Dashboard = () => {
             <CardTitle>Confidence</CardTitle>
             <ShieldCheck className="w-4 h-4 text-gray-400" />
           </CardHeader>
-          <CardValue>{analysis.confidence.toFixed(1)}%</CardValue>
+          <CardValue>{confidence.toFixed(1)}%</CardValue>
           <p className="text-xs text-gray-500 mt-2">AI Model Certainty</p>
         </Card>
 
@@ -279,7 +412,7 @@ export const Dashboard = () => {
             <CardTitle>Stability</CardTitle>
             <TrendingUp className="w-4 h-4 text-gray-400" />
           </CardHeader>
-          <CardValue>{analysis.stability.toFixed(0)}/100</CardValue>
+          <CardValue>{stability.toFixed(0)}/100</CardValue>
           <p className="text-xs text-gray-500 mt-2">Inverse Volatility Index</p>
         </Card>
 
@@ -289,25 +422,25 @@ export const Dashboard = () => {
             <AlertCircle className="w-4 h-4 text-gray-400" />
           </CardHeader>
           <div className="space-y-2">
-            {analysis.breakdown.severity > 20 && (
+            {careScore?.components?.severity && careScore.components.severity > 20 && (
               <div className="flex items-center gap-2 text-sm text-gray-700">
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500" />
                 High Severity Deviation
               </div>
             )}
-            {analysis.breakdown.persistence > 10 && (
+            {careScore?.components?.persistence && careScore.components.persistence > 10 && (
               <div className="flex items-center gap-2 text-sm text-gray-700">
                 <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                 Sustained Trend (&gt;14 days)
               </div>
             )}
-            {analysis.breakdown.manualModifier > 0 && (
+            {careScore?.components?.manual_modifier && careScore.components.manual_modifier > 0 && (
               <div className="flex items-center gap-2 text-sm text-gray-700">
                 <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Reported Symptoms
               </div>
             )}
-            {analysis.currentScore < 30 && (
+            {currentScore < 30 && (
               <div className="text-sm text-gray-500">No significant drift factors.</div>
             )}
           </div>
@@ -321,7 +454,7 @@ export const Dashboard = () => {
             <CardTitle>Current Vitals</CardTitle>
           </CardHeader>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {summary.current_metrics.heart_rate.value && (
+            {summary.current_metrics.heart_rate?.value && (
               <div className="p-3 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500">Heart Rate</p>
                 <p className="text-xl font-semibold text-gray-900">
@@ -330,7 +463,7 @@ export const Dashboard = () => {
                 </p>
               </div>
             )}
-            {summary.current_metrics.hrv.value && (
+            {summary.current_metrics.hrv?.value && (
               <div className="p-3 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500">HRV</p>
                 <p className="text-xl font-semibold text-gray-900">
@@ -339,7 +472,7 @@ export const Dashboard = () => {
                 </p>
               </div>
             )}
-            {summary.current_metrics.sleep_duration.value && (
+            {summary.current_metrics.sleep_duration?.value && (
               <div className="p-3 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500">Sleep</p>
                 <p className="text-xl font-semibold text-gray-900">
@@ -348,7 +481,7 @@ export const Dashboard = () => {
                 </p>
               </div>
             )}
-            {summary.current_metrics.activity_level.value && (
+            {summary.current_metrics.activity_level?.value && (
               <div className="p-3 bg-gray-50 rounded-lg">
                 <p className="text-xs text-gray-500">Steps</p>
                 <p className="text-xl font-semibold text-gray-900">
@@ -359,43 +492,76 @@ export const Dashboard = () => {
           </div>
         </Card>
       )}
-      {/* Care Team Section */}
+
+      {/* Health Suggestions */}
+      {healthSuggestions && healthSuggestions.suggestions.length > 0 && (
+        <Card delay={0.6}>
+          <CardHeader>
+            <CardTitle>Wellness Suggestions</CardTitle>
+          </CardHeader>
+          <div className="space-y-3">
+            {healthSuggestions.suggestions.map((suggestion, index) => (
+              <div key={index} className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
+                <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-medium mt-0.5">
+                  {index + 1}
+                </div>
+                <p className="text-sm text-blue-900">{suggestion}</p>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-4 italic">{healthSuggestions.disclaimer}</p>
+        </Card>
+      )}
+
+      {/* Care Team & Alerts */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
             <CardTitle>Your Care Team</CardTitle>
           </CardHeader>
           <div className="space-y-4">
-            {/* This would be populated from API */}
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold">
-                  D
-                </div>
-                <div>
-                  <p className="font-medium text-gray-900">Dr. Sarah Chen</p>
-                  <p className="text-xs text-gray-500">Cardiologist</p>
-                </div>
+            {careTeam.length === 0 ? (
+              <div className="text-center py-8">
+                <Users className="w-12 h-12 text-gray-200 mx-auto mb-3" />
+                <p className="text-gray-900 font-medium">No connections yet</p>
+                <p className="text-sm text-gray-500 mb-4">Connect with doctors and caretakers</p>
+                <Link to="/connections">
+                  <Button variant="outline">Add Connection</Button>
+                </Link>
               </div>
-              <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">Connected</span>
-            </div>
-
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold">
-                  M
+            ) : (
+              <>
+                {careTeam.map((member) => (
+                  <div key={member.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className={clsx(
+                        "w-10 h-10 rounded-full flex items-center justify-center font-bold",
+                        member.role === "doctor" ? "bg-emerald-100 text-emerald-600" : "bg-blue-100 text-blue-600"
+                      )}>
+                        {member.role === "doctor" ? <Stethoscope className="w-5 h-5" /> : <Heart className="w-5 h-5" />}
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">{member.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {member.role === "doctor" ? member.specialization || "Doctor" : "Caretaker"}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={clsx(
+                      "text-xs px-2 py-1 rounded-full",
+                      member.status === "accepted" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                    )}>
+                      {member.status === "accepted" ? "Connected" : "Pending"}
+                    </span>
+                  </div>
+                ))}
+                <div className="pt-2">
+                  <Link to="/connections">
+                    <Button variant="outline" className="w-full text-sm">Manage Connections</Button>
+                  </Link>
                 </div>
-                <div>
-                  <p className="font-medium text-gray-900">Mark Doe</p>
-                  <p className="text-xs text-gray-500">Caretaker</p>
-                </div>
-              </div>
-              <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">Active</span>
-            </div>
-
-            <div className="pt-2">
-              <Button variant="outline" className="w-full text-sm">Manage Connections</Button>
-            </div>
+              </>
+            )}
           </div>
         </Card>
 
@@ -409,7 +575,7 @@ export const Dashboard = () => {
             <p className="text-sm text-gray-500">Your health metrics are stable</p>
           </div>
         </Card>
-      </div>
-    </div>
+      </div >
+    </div >
   );
 };

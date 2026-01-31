@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db, init_db
-from app.routes import health, analysis, escalation, users, webhook, auth, dashboard, oauth
-from app.routers import doctors, caretakers, relationships, notifications
+from app.routes import health, analysis, escalation, users, webhook, auth, dashboard, oauth, care_score
+from app.routers import doctors, caretakers, relationships, notifications, patients
 from app.services.synthetic_data import SyntheticDataGenerator
 from app.services.gemini_service import GeminiService
 
@@ -62,6 +62,8 @@ app.include_router(doctors.router)        # Doctor API endpoints
 app.include_router(caretakers.router)     # Caretaker API endpoints
 app.include_router(relationships.router)  # Patient-Doctor-Caretaker connections
 app.include_router(notifications.router)  # Notification system
+app.include_router(patients.router)       # Patient care team management
+app.include_router(care_score.router)     # CareScore calculation
 
 
 @app.on_event("startup")
