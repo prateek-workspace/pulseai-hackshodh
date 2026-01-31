@@ -183,3 +183,66 @@ def get_health_trends(
         })
     
     return {"trends": result, "days": days}
+
+
+@router.get("/user/{user_id}/suggestions")
+def get_health_suggestions(user_id: int, db: Session = Depends(get_db)):
+    """
+    Get AI-generated health suggestions based on current CareScore
+    Uses Gemini API for personalized lifestyle recommendations
+    """
+    from app.models.care_score import CareScore
+    from app.services.gemini_health_service import get_health_suggestions_service
+    
+    # Get latest care score
+    care_score = db.query(CareScore).filter(
+        CareScore.user_id == user_id
+    ).order_by(CareScore.timestamp.desc()).first()
+    
+    if not care_score:
+        return {
+            "suggestions": [
+                "Continue monitoring your health metrics",
+                "Stay hydrated and maintain regular sleep patterns",
+                "Consider syncing your wearable data for personalized insights"
+            ],
+            "status": "Unknown",
+            "care_score": None,
+            "disclaimer": "These are general wellness suggestions only and do not constitute medical advice.",
+            "source": "default"
+        }
+    
+    # Get recent health metrics
+    latest_health = db.query(HealthData).filter(
+        HealthData.user_id == user_id
+    ).order_by(HealthData.timestamp.desc()).first()
+    
+    recent_metrics = None
+    if latest_health:
+        recent_metrics = {
+            "heart_rate": latest_health.heart_rate,
+            "hrv": latest_health.hrv,
+            "sleep_duration": latest_health.sleep_duration,
+            "activity_level": latest_health.activity_level
+        }
+    
+    # Get contributing factors from care score components
+    contributing_factors = []
+    if care_score.severity_component and care_score.severity_component > 15:
+        contributing_factors.append("elevated severity in vital signs")
+    if care_score.persistence_component and care_score.persistence_component > 10:
+        contributing_factors.append("sustained patterns over several days")
+    if care_score.cross_signal_component and care_score.cross_signal_component > 5:
+        contributing_factors.append("multiple signals showing changes")
+    
+    # Generate suggestions
+    service = get_health_suggestions_service()
+    suggestions = service.generate_suggestions(
+        care_score=care_score.care_score,
+        status=care_score.status,
+        contributing_factors=contributing_factors if contributing_factors else None,
+        recent_metrics=recent_metrics
+    )
+    
+    return suggestions
+
